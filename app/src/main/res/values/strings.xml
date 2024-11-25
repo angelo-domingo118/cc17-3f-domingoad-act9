@@ -9,4 +9,5 @@
     <string name="flights_from">Flights from %s</string>
     <string name="depart">DEPART</string>
     <string name="arrive">ARRIVE</string>
+    <string name="airport">Airport</string>
 </resources>
