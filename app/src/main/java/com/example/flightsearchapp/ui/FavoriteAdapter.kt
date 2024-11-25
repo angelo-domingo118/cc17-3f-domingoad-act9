@@ -18,7 +18,10 @@ class FavoriteAdapter(
         
         fun bind(favorite: Favorite) {
             binding.apply {
-                routeText.text = "${favorite.departureCode} → ${favorite.destinationCode}"
+                departureCode.text = favorite.departureCode
+                departureName.text = favorite.departureAirport?.name ?: ""
+                destinationCode.text = favorite.destinationCode
+                destinationName.text = favorite.destinationAirport?.name ?: ""
                 deleteButton.setOnClickListener { onDeleteClick(favorite) }
             }
         }

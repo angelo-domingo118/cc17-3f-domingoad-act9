@@ -10,4 +10,8 @@ class AirportRepository(private val airportDao: AirportDao) {
     fun getDestinationAirports(departureCode: String): Flow<List<Airport>> {
         return airportDao.getAllAirportsExcept(departureCode)
     }
+
+    suspend fun getAirportByCode(code: String): Airport? {
+        return airportDao.getAirportByCode(code)
+    }
 } 

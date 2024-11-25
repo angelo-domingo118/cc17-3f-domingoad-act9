@@ -16,4 +16,7 @@ interface AirportDao {
 
     @Query("SELECT * FROM airport WHERE iata_code != :excludeCode ORDER BY passengers DESC")
     fun getAllAirportsExcept(excludeCode: String): Flow<List<Airport>>
+
+    @Query("SELECT * FROM airport WHERE iata_code = :code LIMIT 1")
+    suspend fun getAirportByCode(code: String): Airport?
 } 

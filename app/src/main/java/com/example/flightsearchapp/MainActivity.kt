@@ -37,6 +37,8 @@ import android.widget.Toast
 import android.content.Context
 import android.view.inputmethod.InputMethodManager
 import kotlinx.coroutines.flow.first
+import androidx.activity.OnBackPressedCallback
+import androidx.activity.addCallback
 
 class MainActivity : AppCompatActivity() {
     private lateinit var preferencesManager: PreferencesManager
@@ -76,6 +78,7 @@ class MainActivity : AppCompatActivity() {
         setupFlightRecyclerView()
         setupFavorites()
         restoreAppState()
+        setupBackNavigation()
     }
 
     private fun setupDependencies() {
@@ -259,6 +262,11 @@ class MainActivity : AppCompatActivity() {
                     showEmptyFavorites()
                 } else {
                     hideEmptyState()
+                    // Load airport information for each favorite
+                    favorites.forEach { favorite ->
+                        favorite.departureAirport = airportRepository.getAirportByCode(favorite.departureCode)
+                        favorite.destinationAirport = airportRepository.getAirportByCode(favorite.destinationCode)
+                    }
                     favoriteAdapter.submitList(favorites)
                 }
             }
@@ -426,6 +434,27 @@ class MainActivity : AppCompatActivity() {
             airportAdapter.submitList(emptyList())
             favoriteAdapter.submitList(emptyList())
             flightAdapter.submitList(emptyList())
+        }
+    }
+
+    private fun setupBackNavigation() {
+        onBackPressedDispatcher.addCallback(this) {
+            when {
+                // If there's text in search, clear it and show favorites
+                !searchEditText.text.isNullOrEmpty() -> {
+                    searchEditText.setText("")
+                    showFavorites()
+                }
+                // If we're showing flights, go back to favorites
+                currentDisplayState == DisplayState.FLIGHTS -> {
+                    showFavorites()
+                }
+                // Otherwise, allow normal back behavior (exit app)
+                else -> {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
         }
     }
 }
