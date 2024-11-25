@@ -34,6 +34,9 @@ import com.example.flightsearchapp.databinding.ItemFlightBinding
 import com.example.flightsearchapp.databinding.ItemFavoriteRouteBinding
 import android.util.Log
 import android.widget.Toast
+import android.content.Context
+import android.view.inputmethod.InputMethodManager
+import kotlinx.coroutines.flow.first
 
 class MainActivity : AppCompatActivity() {
     private lateinit var preferencesManager: PreferencesManager
@@ -50,6 +53,12 @@ class MainActivity : AppCompatActivity() {
     private val favoriteJob = Job()
     private val favoriteScope = CoroutineScope(Dispatchers.Main + favoriteJob)
     private var currentScrollPosition = 0
+    private enum class DisplayState {
+        FAVORITES,
+        SEARCH_RESULTS,
+        FLIGHTS
+    }
+    private var currentDisplayState = DisplayState.FAVORITES
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -127,18 +136,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun searchAirports(query: String) {
-        // Cancel previous search job
-        searchScope.cancel()
-        
         if (query.isBlank()) {
-            Log.d("MainActivity", "Empty query, showing favorites")
             showFavorites()
             return
         }
-
+        
+        updateDisplayState(DisplayState.SEARCH_RESULTS)
+        // Cancel previous search job
+        searchScope.cancel()
+        
         lifecycleScope.launch {
             try {
                 Log.d("MainActivity", "Searching for query: $query")
+                // Clear favorites adapter first
+                favoriteAdapter.submitList(emptyList())
+                
                 airportRepository.searchAirports(query).collect { airports ->
                     Log.d("MainActivity", "Found ${airports.size} airports")
                     if (airports.isEmpty()) {
@@ -146,9 +158,10 @@ class MainActivity : AppCompatActivity() {
                         showEmptyState()
                     } else {
                         hideEmptyState()
-                        airportAdapter.submitList(airports)
+                        // Set the airport adapter and its data
                         findViewById<RecyclerView>(R.id.search_results).adapter = 
                             airportAdapter as RecyclerView.Adapter<RecyclerView.ViewHolder>
+                        airportAdapter.submitList(airports)
                     }
                 }
             } catch (e: Exception) {
@@ -170,30 +183,83 @@ class MainActivity : AppCompatActivity() {
         findViewById<RecyclerView>(R.id.search_results).visibility = View.VISIBLE
     }
 
-    private fun handleAirportSelection(airport: Airport) {
-        // Save the selected airport code
+    private fun handleAirportSelection(selectedAirport: Airport) {
+        updateDisplayState(DisplayState.FLIGHTS)
+        // Hide keyboard and clear search
+        searchEditText.clearFocus()
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+            .hideSoftInputFromWindow(searchEditText.windowToken, 0)
+        
+        // Update title to show selected airport
+        supportActionBar?.title = getString(R.string.flights_from, selectedAirport.iataCode)
+        
+        // Clear other adapters first
+        airportAdapter.submitList(emptyList())
+        favoriteAdapter.submitList(emptyList())
+        
+        // Set the flight adapter
+        val recyclerView = findViewById<RecyclerView>(R.id.search_results)
+        recyclerView.adapter = flightAdapter
+        
+        // Load and display flights
         lifecycleScope.launch {
-            preferencesManager.saveSearchQuery(airport.iataCode)
-        }
-        // Query for available flights
-        searchScope.launch {
-            airportRepository.getDestinationAirports(airport.iataCode)
-                .collect { destinations ->
-                    // Switch to flight results adapter
-                    showFlightResults(airport, destinations)
-                }
+            try {
+                Log.d("MainActivity", "Loading flights from ${selectedAirport.iataCode}")
+                airportRepository.getDestinationAirports(selectedAirport.iataCode)
+                    .collect { destinations ->
+                        Log.d("MainActivity", "Found ${destinations.size} destinations")
+                        val flights = destinations.map { destination ->
+                            Flight(
+                                departureAirport = selectedAirport,
+                                destinationAirport = destination,
+                                isFavorite = false // Will be updated by the collect below
+                            )
+                        }
+                        flightAdapter.submitList(flights)
+                        
+                        // Check favorite status for each flight
+                        flights.forEach { flight ->
+                            favoriteRepository.isRouteFavorite(
+                                flight.departureAirport.iataCode,
+                                flight.destinationAirport.iataCode
+                            ).collect { isFavorite ->
+                                flight.isFavorite = isFavorite
+                                val position = flightAdapter.currentList.indexOf(flight)
+                                if (position != -1) {
+                                    flightAdapter.notifyItemChanged(position)
+                                }
+                            }
+                        }
+                    }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Error loading flights", e)
+                Toast.makeText(
+                    this@MainActivity,
+                    "Error loading flights: ${e.localizedMessage}",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
     }
 
     private fun showFavorites() {
+        updateDisplayState(DisplayState.FAVORITES)
+        // Clear other adapters first
+        airportAdapter.submitList(emptyList())
+        flightAdapter.submitList(emptyList())
+        
+        // Set the favorite adapter immediately
+        findViewById<RecyclerView>(R.id.search_results).adapter = 
+            favoriteAdapter as RecyclerView.Adapter<RecyclerView.ViewHolder>
+        
+        // Start observing favorites
         favoriteScope.launch {
             favoriteRepository.getAllFavorites().collect { favorites ->
                 if (favorites.isEmpty()) {
                     showEmptyFavorites()
                 } else {
+                    hideEmptyState()
                     favoriteAdapter.submitList(favorites)
-                    findViewById<RecyclerView>(R.id.search_results).adapter = 
-                        favoriteAdapter as RecyclerView.Adapter<RecyclerView.ViewHolder>
                 }
             }
         }
@@ -208,9 +274,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleFavoriteDelete(favorite: Favorite) {
-        lifecycleScope.launch {
+        favoriteScope.launch {
             favoriteRepository.removeFavorite(favorite)
+            // After deleting the last favorite, check if the list is empty and update UI
+            val remainingFavorites = favoriteRepository.getAllFavorites().first()
+            if (remainingFavorites.isEmpty()) {
+                withContext(Dispatchers.Main) {
+                    updateEmptyState(true)
+                }
+            }
         }
+    }
+
+    private fun updateEmptyState(isEmpty: Boolean) {
+        findViewById<TextView>(R.id.empty_state).visibility = if (isEmpty) View.VISIBLE else View.GONE
+        findViewById<RecyclerView>(R.id.search_results).visibility = if (isEmpty) View.GONE else View.VISIBLE
     }
 
     private fun showFlightResults(departure: Airport, destinations: List<Airport>) {
@@ -246,23 +324,37 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleFavoriteClick(flight: Flight) {
         lifecycleScope.launch {
-            favoriteRepository.isRouteFavorite(
+            // First check if it's favorite
+            val isFavorite = favoriteRepository.isRouteFavorite(
                 flight.departureAirport.iataCode,
                 flight.destinationAirport.iataCode
-            ).collect { isFavorite ->
-                if (isFavorite) {
-                    val favorite = favoriteRepository.getFavorite(
-                        flight.departureAirport.iataCode,
-                        flight.destinationAirport.iataCode
-                    )
-                    favorite?.let { favoriteRepository.removeFavorite(it) }
-                } else {
-                    favoriteRepository.addFavorite(
-                        Favorite(
-                            departureCode = flight.departureAirport.iataCode,
-                            destinationCode = flight.destinationAirport.iataCode
-                        )
-                    )
+            ).first() // Use first() instead of collect to get single value
+
+            if (isFavorite) {
+                val favorite = favoriteRepository.getFavorite(
+                    flight.departureAirport.iataCode,
+                    flight.destinationAirport.iataCode
+                )
+                favorite?.let { 
+                    favoriteRepository.removeFavorite(it)
+                    // Update UI immediately
+                    flight.isFavorite = false
+                    val position = flightAdapter.currentList.indexOf(flight)
+                    if (position != -1) {
+                        flightAdapter.notifyItemChanged(position)
+                    }
+                }
+            } else {
+                val newFavorite = Favorite(
+                    departureCode = flight.departureAirport.iataCode,
+                    destinationCode = flight.destinationAirport.iataCode
+                )
+                favoriteRepository.addFavorite(newFavorite)
+                // Update UI immediately
+                flight.isFavorite = true
+                val position = flightAdapter.currentList.indexOf(flight)
+                if (position != -1) {
+                    flightAdapter.notifyItemChanged(position)
                 }
             }
         }
@@ -273,13 +365,9 @@ class MainActivity : AppCompatActivity() {
             handleFavoriteDelete(favorite)
         }
         
-        // Observe favorites when search is empty
-        lifecycleScope.launch {
-            searchEditText.text?.let { searchText ->
-                if (searchText.isEmpty()) {
-                    showFavorites()
-                }
-            }
+        // Show favorites initially if search is empty
+        if (searchEditText.text.isNullOrEmpty()) {
+            showFavorites()
         }
     }
 
@@ -329,5 +417,15 @@ class MainActivity : AppCompatActivity() {
         currentScrollPosition = savedInstanceState.getInt("SCROLL_POSITION", 0)
         val recyclerView = findViewById<RecyclerView>(R.id.search_results)
         recyclerView.layoutManager?.scrollToPosition(currentScrollPosition)
+    }
+
+    private fun updateDisplayState(newState: DisplayState) {
+        if (currentDisplayState != newState) {
+            currentDisplayState = newState
+            // Clear all adapters
+            airportAdapter.submitList(emptyList())
+            favoriteAdapter.submitList(emptyList())
+            flightAdapter.submitList(emptyList())
+        }
     }
 }

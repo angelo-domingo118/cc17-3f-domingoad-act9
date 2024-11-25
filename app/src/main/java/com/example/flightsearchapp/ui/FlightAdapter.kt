@@ -24,13 +24,20 @@ class FlightAdapter(
                 destinationCode.text = flight.destinationAirport.iataCode
                 destinationName.text = flight.destinationAirport.name
 
-                favoriteButton.setIconResource(
-                    if (flight.isFavorite) R.drawable.ic_favorite
-                    else R.drawable.ic_favorite_border
-                )
-
-                favoriteButton.setOnClickListener {
-                    onFavoriteClick(flight)
+                favoriteButton.apply {
+                    setIconResource(
+                        if (flight.isFavorite) R.drawable.ic_favorite
+                        else R.drawable.ic_favorite_border
+                    )
+                    
+                    contentDescription = itemView.context.getString(
+                        if (flight.isFavorite) R.string.remove_from_favorites
+                        else R.string.add_to_favorites
+                    )
+                    
+                    setOnClickListener {
+                        onFavoriteClick(flight)
+                    }
                 }
             }
         }
